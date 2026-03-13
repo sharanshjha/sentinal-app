@@ -1,0 +1,998 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000000">
+<title>Battery Monitor</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Battery Monitor">
+<script src="https://unpkg.com/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
+<script src="https://unpkg.com/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; user-select:none; }
+
+html, body {
+  width:100%; height:100%;
+  background:#000;
+  overflow:hidden;
+  touch-action:manipulation;
+  font-family: -apple-system, sans-serif;
+}
+
+/* ═══════════════════════════════════════
+   LOADING SCREEN
+═══════════════════════════════════════ */
+#loading {
+  position:fixed; inset:0;
+  background:#000;
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  gap:20px; z-index:999;
+  transition:opacity 0.6s;
+}
+
+.load-icon { font-size:3rem; }
+
+.load-title {
+  font-size:1.1rem;
+  color:#fff;
+  letter-spacing:1px;
+}
+
+.load-bar-bg {
+  width:200px; height:4px;
+  background:#222;
+  border-radius:2px;
+  overflow:hidden;
+}
+
+.load-bar-fg {
+  height:100%;
+  width:0%;
+  background:#4CAF50;
+  border-radius:2px;
+  transition:width 0.4s ease;
+}
+
+#load-msg { font-size:0.75rem; color:#555; letter-spacing:1px; }
+
+/* ═══════════════════════════════════════
+   SETUP SCREEN
+═══════════════════════════════════════ */
+#setup-screen {
+  position:fixed; inset:0;
+  background:#0d0d0d;
+  display:none;
+  flex-direction:column;
+  padding:24px 20px;
+  overflow-y:auto;
+  z-index:50;
+}
+
+.setup-header {
+  display:flex; align-items:center; gap:12px;
+  margin-bottom:28px;
+}
+
+.setup-icon {
+  width:44px; height:44px;
+  background:#1a1a2e;
+  border-radius:12px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:1.4rem;
+}
+
+.setup-title { font-size:1.2rem; color:#fff; font-weight:600; }
+.setup-sub   { font-size:0.75rem; color:#555; margin-top:2px; }
+
+.section-label {
+  font-size:0.65rem;
+  letter-spacing:2px;
+  color:#444;
+  margin-bottom:10px;
+  text-transform:uppercase;
+}
+
+.card {
+  background:#111;
+  border-radius:14px;
+  padding:16px;
+  margin-bottom:14px;
+  border:1px solid #1a1a1a;
+}
+
+.row {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:10px 0;
+  border-bottom:1px solid #1a1a1a;
+}
+.row:last-child { border-bottom:none; }
+
+.row-label { font-size:0.85rem; color:#ccc; }
+.row-sub   { font-size:0.7rem;  color:#555; margin-top:2px; }
+
+/* Toggle switch */
+.toggle {
+  position:relative; width:46px; height:26px; flex-shrink:0;
+}
+.toggle input { opacity:0; width:0; height:0; }
+.toggle-slider {
+  position:absolute; cursor:pointer; inset:0;
+  background:#222; border-radius:26px;
+  transition:.3s;
+}
+.toggle-slider:before {
+  content:''; position:absolute;
+  width:20px; height:20px;
+  left:3px; top:3px;
+  background:#fff; border-radius:50%;
+  transition:.3s;
+}
+input:checked + .toggle-slider { background:#4CAF50; }
+input:checked + .toggle-slider:before { transform:translateX(20px); }
+
+/* Sensitivity slider */
+.sens-row { display:flex; align-items:center; gap:12px; }
+.sens-val { font-size:0.8rem; color:#4CAF50; min-width:36px; text-align:right; }
+input[type=range] {
+  flex:1; -webkit-appearance:none;
+  height:3px; background:#222; border-radius:2px; outline:none;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance:none;
+  width:20px; height:20px;
+  background:#4CAF50; border-radius:50%;
+}
+
+/* Cooldown */
+select {
+  background:#1a1a1a; color:#ccc;
+  border:1px solid #2a2a2a;
+  border-radius:8px;
+  padding:6px 10px;
+  font-size:0.8rem;
+  outline:none;
+}
+
+.start-btn {
+  width:100%;
+  padding:16px;
+  background:#4CAF50;
+  color:#000;
+  font-size:1rem;
+  font-weight:700;
+  border:none;
+  border-radius:14px;
+  cursor:pointer;
+  letter-spacing:1px;
+  margin-top:8px;
+  transition:opacity 0.2s;
+}
+.start-btn:active { opacity:0.8; }
+
+.status-badge {
+  display:inline-flex; align-items:center; gap:6px;
+  font-size:0.7rem; color:#4CAF50;
+  background:rgba(76,175,80,0.1);
+  padding:4px 10px; border-radius:20px;
+}
+
+.status-badge.red { color:#f44; background:rgba(255,68,68,0.1); }
+
+/* ═══════════════════════════════════════
+   COVERT SCREEN  — looks like battery app
+═══════════════════════════════════════ */
+#covert-screen {
+  position:fixed; inset:0;
+  background:#000;
+  display:none;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  z-index:40;
+}
+
+/* Fake battery charging UI */
+.battery-wrap {
+  display:flex; flex-direction:column;
+  align-items:center; gap:10px;
+}
+
+.battery-icon-wrap {
+  position:relative;
+  width:80px; height:140px;
+}
+
+.battery-body {
+  width:80px; height:130px;
+  border:3px solid #333;
+  border-radius:10px;
+  position:relative;
+  overflow:hidden;
+}
+
+.battery-tip {
+  width:30px; height:10px;
+  background:#333;
+  border-radius:3px 3px 0 0;
+  margin:0 auto;
+}
+
+.battery-fill {
+  position:absolute;
+  bottom:0; left:0; right:0;
+  background:#4CAF50;
+  transition:height 3s ease;
+  border-radius:0 0 7px 7px;
+}
+
+.battery-fill.low    { background:#f44336; }
+.battery-fill.medium { background:#ff9800; }
+
+.battery-pct {
+  position:absolute; inset:0;
+  display:flex; align-items:center; justify-content:center;
+  font-size:1.4rem; font-weight:700; color:#fff;
+  text-shadow:0 1px 4px rgba(0,0,0,0.8);
+  z-index:1;
+}
+
+.battery-bolt {
+  position:absolute; inset:0;
+  display:flex; align-items:center; justify-content:center;
+  font-size:2.2rem; z-index:2; opacity:0.85;
+}
+
+.charging-text {
+  font-size:0.8rem; color:#555;
+  letter-spacing:2px;
+}
+
+.time-text {
+  font-size:2.2rem; color:#fff;
+  font-weight:200; letter-spacing:4px;
+  margin-bottom:4px;
+}
+
+.date-text {
+  font-size:0.85rem; color:#555;
+  letter-spacing:1px;
+}
+
+/* Secret tap zone — triple tap top-right to open settings */
+#secret-tap {
+  position:fixed;
+  top:0; right:0;
+  width:80px; height:80px;
+  z-index:100;
+  background:transparent;
+}
+
+/* ═══════════════════════════════════════
+   ALERT FLASH (invisible to room)
+═══════════════════════════════════════ */
+#silent-flash {
+  position:fixed; inset:0;
+  background:rgba(255,255,255,0.04);
+  opacity:0; z-index:200;
+  pointer-events:none;
+  transition:opacity 0.1s;
+}
+
+/* Hidden camera canvas */
+#video  { position:fixed; top:-9999px; left:-9999px; width:1px; height:1px; }
+#canvas { position:fixed; top:-9999px; left:-9999px; width:320px; height:240px; }
+
+/* ═══════════════════════════════════════
+   ALERT LOG (hidden, secret screen)
+═══════════════════════════════════════ */
+#log-screen {
+  position:fixed; inset:0;
+  background:#0d0d0d;
+  display:none; flex-direction:column;
+  padding:24px 20px;
+  overflow-y:auto;
+  z-index:60;
+}
+
+.log-header {
+  display:flex; align-items:center;
+  justify-content:space-between;
+  margin-bottom:20px;
+}
+
+.log-title { font-size:1.1rem; color:#fff; font-weight:600; }
+.close-btn {
+  background:#1a1a1a; border:none; color:#ccc;
+  width:32px; height:32px; border-radius:50%;
+  font-size:1.1rem; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+}
+
+.log-item {
+  background:#111;
+  border-radius:10px;
+  padding:12px 14px;
+  margin-bottom:8px;
+  border-left:3px solid #4CAF50;
+  animation:fadeIn 0.3s ease;
+}
+.log-item.alert-item { border-left-color:#f44; }
+
+@keyframes fadeIn { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:translateY(0)} }
+
+.log-item-time { font-size:0.65rem; color:#555; margin-bottom:4px; }
+.log-item-msg  { font-size:0.82rem; color:#ccc; }
+
+.stat-chips {
+  display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px;
+}
+
+.chip {
+  background:#111; border:1px solid #1a1a1a;
+  border-radius:8px; padding:8px 12px;
+  flex:1; min-width:80px; text-align:center;
+}
+.chip-val { font-size:1.3rem; font-weight:700; color:#4CAF50; }
+.chip-lbl { font-size:0.6rem; color:#555; margin-top:2px; }
+
+/* ═══════════════════════════════════════
+   TELEGRAM STATUS TOAST
+═══════════════════════════════════════ */
+#tg-toast {
+  position:fixed;
+  bottom:30px; left:50%;
+  transform:translateX(-50%) translateY(80px);
+  background:#1a1a2e;
+  border:1px solid #2a3a5e;
+  color:#7eb3f5;
+  font-size:0.75rem;
+  padding:8px 18px;
+  border-radius:20px;
+  z-index:300;
+  white-space:nowrap;
+  transition:transform 0.3s cubic-bezier(.34,1.56,.64,1);
+}
+#tg-toast.show { transform:translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<!-- Hidden camera elements -->
+<video id="video" autoplay muted playsinline></video>
+<canvas id="canvas"></canvas>
+
+<!-- Silent flash -->
+<div id="silent-flash"></div>
+
+<!-- Telegram toast -->
+<div id="tg-toast">📨 Telegram alert sent</div>
+
+<!-- ═══════════ LOADING ═══════════ -->
+<div id="loading">
+  <div class="load-icon">🔋</div>
+  <div class="load-title">Battery Monitor</div>
+  <div class="load-bar-bg"><div class="load-bar-fg" id="load-bar"></div></div>
+  <div id="load-msg">Starting up...</div>
+</div>
+
+<!-- ═══════════ SETUP SCREEN ═══════════ -->
+<div id="setup-screen">
+  <div class="setup-header">
+    <div class="setup-icon">🛡️</div>
+    <div>
+      <div class="setup-title">Room Guardian</div>
+      <div class="setup-sub">Configure your covert monitor</div>
+    </div>
+  </div>
+
+  <!-- Telegram status -->
+  <div class="section-label">Telegram</div>
+  <div class="card">
+    <div class="row">
+      <div>
+        <div class="row-label">Bot Connection</div>
+        <div class="row-sub">Sends you silent alerts + photo</div>
+      </div>
+      <div class="status-badge" id="tg-status">⬤ Checking...</div>
+    </div>
+    <div class="row">
+      <div>
+        <div class="row-label">Send Test Message</div>
+        <div class="row-sub" id="tg-test-result">Tap to verify Telegram works</div>
+      </div>
+      <button onclick="testSendNow()" style="background:#1a3a1a;border:1px solid #2a5a2a;color:#4CAF50;padding:8px 14px;border-radius:8px;font-size:0.75rem;cursor:pointer;font-family:inherit;">TEST</button>
+    </div>
+  </div>
+
+  <!-- Alert settings -->
+  <div class="section-label">Alert Settings</div>
+  <div class="card">
+    <div class="row">
+      <div>
+        <div class="row-label">Confidence Level</div>
+        <div class="row-sub">How sure before alerting</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;width:140px;">
+        <input type="range" id="conf-sl" min="30" max="90" value="60" oninput="document.getElementById('conf-v').textContent=this.value+'%'">
+        <span class="sens-val" id="conf-v">60%</span>
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <div class="row-label">Alert Cooldown</div>
+        <div class="row-sub">Min gap between alerts</div>
+      </div>
+      <select id="cool-sel">
+        <option value="5000">5 sec</option>
+        <option value="10000" selected>10 sec</option>
+        <option value="20000">20 sec</option>
+        <option value="30000">30 sec</option>
+        <option value="60000">1 min</option>
+      </select>
+    </div>
+    <div class="row">
+      <div>
+        <div class="row-label">Send Photo Snapshot</div>
+        <div class="row-sub">Captures intruder's photo</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="tog-photo" checked>
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="row">
+      <div>
+        <div class="row-label">Vibrate on Detection</div>
+        <div class="row-sub">Silent buzz on this phone</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="tog-vibe" checked>
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="row">
+      <div>
+        <div class="row-label">Sound Alert</div>
+        <div class="row-sub">Beep on this phone (off = covert)</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="tog-sound">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <!-- Disguise settings -->
+  <div class="section-label">Disguise</div>
+  <div class="card">
+    <div class="row">
+      <div>
+        <div class="row-label">Screen Disguise</div>
+        <div class="row-sub">What the screen shows while running</div>
+      </div>
+      <select id="disguise-sel">
+        <option value="battery">🔋 Battery Charging</option>
+        <option value="clock">🕐 Clock Screen</option>
+        <option value="black">⬛ Black Screen</option>
+      </select>
+    </div>
+    <div class="row">
+      <div>
+        <div class="row-label">Keep Screen On</div>
+        <div class="row-sub">WakeLock — prevents sleep</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="tog-wake" checked>
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <button class="start-btn" id="start-btn">🛡️ ACTIVATE GUARDIAN</button>
+  <div style="height:20px;"></div>
+</div>
+
+<!-- ═══════════ COVERT SCREEN ═══════════ -->
+<div id="covert-screen">
+  <!-- Secret triple-tap zone (top-right corner) -->
+  <div id="secret-tap"></div>
+
+  <!-- Battery disguise -->
+  <div id="disguise-battery" class="battery-wrap">
+    <div class="time-text" id="fake-time">00:00</div>
+    <div class="date-text" id="fake-date">Monday, 1 January</div>
+    <br>
+    <div class="battery-tip"></div>
+    <div class="battery-body">
+      <div class="battery-fill" id="bat-fill" style="height:72%"></div>
+      <div class="battery-pct" id="bat-pct">72%</div>
+      <div class="battery-bolt">⚡</div>
+    </div>
+    <div class="charging-text">CHARGING</div>
+  </div>
+
+  <!-- Clock disguise -->
+  <div id="disguise-clock" style="display:none; text-align:center;">
+    <div class="time-text" id="clock-time" style="font-size:4rem; letter-spacing:6px;">00:00</div>
+    <div class="date-text" id="clock-date" style="margin-top:8px;">Monday, 1 January</div>
+  </div>
+
+  <!-- Black disguise -->
+  <div id="disguise-black" style="display:none; width:100%; height:100%; background:#000;"></div>
+</div>
+
+<!-- ═══════════ LOG SCREEN ═══════════ -->
+<div id="log-screen">
+  <div class="log-header">
+    <div class="log-title">🛡️ Alert Log</div>
+    <button class="close-btn" id="close-log">✕</button>
+  </div>
+
+  <div class="stat-chips">
+    <div class="chip"><div class="chip-val" id="ls-persons">0</div><div class="chip-lbl">DETECTIONS</div></div>
+    <div class="chip"><div class="chip-val" id="ls-alerts">0</div><div class="chip-lbl">ALERTS SENT</div></div>
+    <div class="chip"><div class="chip-val" id="ls-tg">0</div><div class="chip-lbl">TG MSGS</div></div>
+  </div>
+
+  <div id="log-list">
+    <div class="log-item"><div class="log-item-msg">No alerts yet.</div></div>
+  </div>
+
+  <div style="height:16px;"></div>
+  <button class="start-btn" style="background:#f44336;" id="stop-btn">■ DEACTIVATE</button>
+  <div style="height:20px;"></div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════
+// CONFIG
+// ══════════════════════════════════════════════════════
+const TG_TOKEN   = '8340676505:AAFIX_h1e-zTOhiKHdTULy2Stzr8EY7YX0M';
+const TG_CHAT_ID = '1397315616';
+const TG_API     = `https://api.telegram.org/bot${TG_TOKEN}`;
+
+// ══════════════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════════════
+let model        = null;
+let stream       = null;
+let detecting    = false;
+let rafId        = null;
+let wakeLock     = null;
+let lastAlert    = 0;
+let totalPersons = 0;
+let totalAlerts  = 0;
+let totalTg      = 0;
+let audioCtx     = null;
+let tapCount     = 0;
+let tapTimer     = null;
+
+const video  = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx    = canvas.getContext('2d');
+
+// ══════════════════════════════════════════════════════
+// BOOT — load model
+// ══════════════════════════════════════════════════════
+async function boot() {
+  const bar = document.getElementById('load-bar');
+  const msg = document.getElementById('load-msg');
+
+  msg.textContent = 'Loading AI model...';
+  bar.style.width = '20%';
+
+  // Test Telegram connection silently
+  testTelegram();
+
+  try {
+    await new Promise(r => setTimeout(r, 200));
+    bar.style.width = '50%';
+    msg.textContent = 'Downloading neural network...';
+
+    model = await cocoSsd.load();
+
+    bar.style.width = '100%';
+    msg.textContent = 'Ready ✓';
+    await new Promise(r => setTimeout(r, 500));
+
+    const loader = document.getElementById('loading');
+    loader.style.opacity = '0';
+    setTimeout(() => {
+      loader.style.display = 'none';
+      showSetup();
+    }, 500);
+
+  } catch(e) {
+    msg.textContent = 'Load failed — refresh page';
+    document.getElementById('load-bar').style.background = '#f44';
+  }
+}
+
+async function testTelegram() {
+  try {
+    const r = await fetch(`${TG_API}/getMe`, { method: 'GET' });
+    const d = await r.json();
+    if (d.ok) {
+      document.getElementById('tg-status').textContent = '⬤ Connected';
+      document.getElementById('tg-status').style.color = '#4CAF50';
+      document.getElementById('tg-status').style.background = 'rgba(76,175,80,0.1)';
+    } else {
+      document.getElementById('tg-status').textContent = '⬤ Bot Error';
+      document.getElementById('tg-status').className = 'status-badge red';
+    }
+  } catch(e) {
+    document.getElementById('tg-status').textContent = '⬤ No Internet';
+    document.getElementById('tg-status').className = 'status-badge red';
+  }
+}
+
+async function testSendNow() {
+  const resultEl = document.getElementById('tg-test-result');
+  resultEl.textContent = 'Sending...';
+  resultEl.style.color = '#ffaa00';
+  try {
+    const r = await fetch(`${TG_API}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: TG_CHAT_ID,
+        text: '✅ *Room Guardian Test*\nYour bot is working correctly! Alerts will be sent here when a person is detected.',
+        parse_mode: 'Markdown'
+      })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      resultEl.textContent = '✅ Message delivered!';
+      resultEl.style.color = '#4CAF50';
+    } else {
+      resultEl.textContent = '❌ Failed: ' + (d.description || 'unknown error');
+      resultEl.style.color = '#f44';
+      console.error('TG error:', d);
+    }
+  } catch(e) {
+    resultEl.textContent = '❌ Network error — check internet';
+    resultEl.style.color = '#f44';
+    console.error('TG fetch error:', e);
+  }
+}
+
+// ══════════════════════════════════════════════════════
+// SETUP
+// ══════════════════════════════════════════════════════
+function showSetup() {
+  document.getElementById('setup-screen').style.display = 'flex';
+}
+
+document.getElementById('start-btn').addEventListener('click', async () => {
+  // Init audio on user gesture
+  initAudio();
+  await startCamera();
+  if (!stream) return;
+
+  document.getElementById('setup-screen').style.display = 'none';
+  showCovert();
+  acquireWakeLock();
+  detecting = true;
+  detectionLoop();
+  startClockTick();
+
+  sendTelegram('🛡️ *Room Guardian ACTIVATED*\nMonitoring started. I will alert you when someone enters.', null);
+});
+
+// ══════════════════════════════════════════════════════
+// CAMERA
+// ══════════════════════════════════════════════════════
+async function startCamera() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width:{ideal:640}, height:{ideal:480} },
+      audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+    canvas.width  = 640;
+    canvas.height = 480;
+  } catch(e) {
+    alert('Camera permission denied. Please allow camera access and try again.');
+  }
+}
+
+// ══════════════════════════════════════════════════════
+// WAKELOCK — keeps screen on
+// ══════════════════════════════════════════════════════
+async function acquireWakeLock() {
+  if (!document.getElementById('tog-wake').checked) return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    addLog('Screen WakeLock active — screen stays on.', false);
+    // Re-acquire if released (e.g. tab switch)
+    document.addEventListener('visibilitychange', async () => {
+      if (document.visibilityState === 'visible' && detecting) {
+        try { wakeLock = await navigator.wakeLock.request('screen'); } catch(e) {}
+      }
+    });
+  } catch(e) {
+    addLog('WakeLock not supported — screen may sleep.', false);
+  }
+}
+
+// ══════════════════════════════════════════════════════
+// COVERT SCREEN
+// ══════════════════════════════════════════════════════
+function showCovert() {
+  const cs = document.getElementById('covert-screen');
+  cs.style.display = 'flex';
+  applyDisguise();
+}
+
+function applyDisguise() {
+  const d = document.getElementById('disguise-sel').value;
+  document.getElementById('disguise-battery').style.display = d === 'battery' ? 'flex' : 'none';
+  document.getElementById('disguise-clock').style.display   = d === 'clock'   ? 'block' : 'none';
+  document.getElementById('disguise-black').style.display   = d === 'black'   ? 'block' : 'none';
+}
+
+// Secret triple-tap top-right → open log
+document.getElementById('secret-tap').addEventListener('click', () => {
+  tapCount++;
+  clearTimeout(tapTimer);
+  tapTimer = setTimeout(() => { tapCount = 0; }, 800);
+  if (tapCount >= 3) {
+    tapCount = 0;
+    openLog();
+  }
+});
+
+function openLog() {
+  document.getElementById('log-screen').style.display = 'flex';
+  document.getElementById('ls-persons').textContent = totalPersons;
+  document.getElementById('ls-alerts').textContent  = totalAlerts;
+  document.getElementById('ls-tg').textContent      = totalTg;
+}
+
+document.getElementById('close-log').addEventListener('click', () => {
+  document.getElementById('log-screen').style.display = 'none';
+});
+
+document.getElementById('stop-btn').addEventListener('click', () => {
+  detecting = false;
+  if (rafId) cancelAnimationFrame(rafId);
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (wakeLock) { wakeLock.release(); wakeLock = null; }
+  document.getElementById('log-screen').style.display   = 'none';
+  document.getElementById('covert-screen').style.display = 'none';
+  sendTelegram('🔴 *Room Guardian DEACTIVATED*\nMonitoring stopped.', null);
+  showSetup();
+});
+
+// ══════════════════════════════════════════════════════
+// CLOCK TICK — updates fake UI
+// ══════════════════════════════════════════════════════
+function startClockTick() {
+  function tick() {
+    const now = new Date();
+    const hh  = String(now.getHours()).padStart(2,'0');
+    const mm  = String(now.getMinutes()).padStart(2,'0');
+    const timeStr = `${hh}:${mm}`;
+    const days  = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    const months= ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    const dateStr = `${days[now.getDay()]}, ${now.getDate()} ${months[now.getMonth()]}`;
+
+    // Battery screen
+    document.getElementById('fake-time').textContent = timeStr;
+    document.getElementById('fake-date').textContent = dateStr;
+
+    // Clock screen
+    document.getElementById('clock-time').textContent = timeStr;
+    document.getElementById('clock-date').textContent = dateStr;
+
+    // Animate battery % slowly (cosmetic)
+    const pct = 60 + Math.round(now.getMinutes() % 40 * 0.6);
+    document.getElementById('bat-pct').textContent  = pct + '%';
+    document.getElementById('bat-fill').style.height = pct + '%';
+    const fill = document.getElementById('bat-fill');
+    fill.className = 'battery-fill' + (pct < 20 ? ' low' : pct < 50 ? ' medium' : '');
+  }
+  tick();
+  setInterval(tick, 30000);
+}
+
+// ══════════════════════════════════════════════════════
+// DETECTION LOOP
+// ══════════════════════════════════════════════════════
+async function detectionLoop() {
+  if (!detecting) return;
+
+  if (video.readyState >= 2 && model) {
+    const threshold = parseInt(document.getElementById('conf-sl').value) / 100;
+    try {
+      const preds   = await model.detect(video);
+      const persons = preds.filter(p => p.class === 'person' && p.score >= threshold);
+
+      if (persons.length > 0) {
+        totalPersons++;
+        fireAlert(persons.length, persons[0].score);
+      }
+    } catch(e) {}
+  }
+
+  // ~4 FPS is enough for detection and saves battery
+  setTimeout(() => { rafId = requestAnimationFrame(detectionLoop); }, 250);
+}
+
+// ══════════════════════════════════════════════════════
+// ALERT
+// ══════════════════════════════════════════════════════
+function fireAlert(count, score) {
+  const cooldown = parseInt(document.getElementById('cool-sel').value);
+  const now = Date.now();
+  if (now - lastAlert < cooldown) return;
+  lastAlert = now;
+  totalAlerts++;
+
+  const pct = Math.round(score * 100);
+  const msg = `🚨 *INTRUDER ALERT*\n👤 ${count} person${count>1?'s':''} detected\n📊 Confidence: ${pct}%\n🕐 ${new Date().toLocaleTimeString()}`;
+
+  // Subtle flash (barely visible, not suspicious)
+  const flash = document.getElementById('silent-flash');
+  flash.style.opacity = '1';
+  setTimeout(() => flash.style.opacity = '0', 150);
+
+  // Vibrate silently
+  if (document.getElementById('tog-vibe').checked && navigator.vibrate) {
+    navigator.vibrate([300, 100, 300]);
+  }
+
+  // Sound (off by default)
+  if (document.getElementById('tog-sound').checked) playBeep();
+
+  // Telegram — with or without photo
+  if (document.getElementById('tog-photo').checked) {
+    const snap = captureSnapshot();
+    sendTelegramPhoto(msg, snap);
+  } else {
+    sendTelegram(msg, null);
+  }
+
+  addLog(`${count} person(s) at ${pct}% confidence`, true);
+}
+
+// ══════════════════════════════════════════════════════
+// SNAPSHOT
+// ══════════════════════════════════════════════════════
+function captureSnapshot() {
+  try {
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/jpeg', 0.7);
+  } catch(e) { return null; }
+}
+
+// ══════════════════════════════════════════════════════
+// TELEGRAM
+// ══════════════════════════════════════════════════════
+async function sendTelegram(text, photoData) {
+  try {
+    const r = await fetch(`${TG_API}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: TG_CHAT_ID,
+        text,
+        parse_mode: 'Markdown',
+        disable_notification: false
+      })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      totalTg++;
+      showTgToast('📨 Telegram alert sent');
+      addLog('Telegram message delivered ✓', false);
+    } else {
+      addLog('Telegram error: ' + (d.description || JSON.stringify(d)), false);
+    }
+  } catch(e) {
+    addLog('Telegram network error: ' + e.message, false);
+  }
+}
+
+async function sendTelegramPhoto(caption, dataUrl) {
+  if (!dataUrl) { sendTelegram(caption, null); return; }
+  try {
+    const res  = await fetch(dataUrl);
+    const blob = await res.blob();
+    const form = new FormData();
+    form.append('chat_id', TG_CHAT_ID);
+    form.append('photo', blob, 'alert.jpg');
+    form.append('caption', caption);
+    form.append('parse_mode', 'Markdown');
+
+    const r = await fetch(`${TG_API}/sendPhoto`, { method: 'POST', body: form });
+    const d = await r.json();
+    if (d.ok) {
+      totalTg++;
+      showTgToast('📸 Photo alert sent to Telegram');
+      addLog('Telegram photo delivered ✓', false);
+    } else {
+      addLog('Photo send failed, trying text: ' + (d.description || ''), false);
+      sendTelegram(caption, null);
+    }
+  } catch(e) {
+    addLog('Photo error, falling back to text: ' + e.message, false);
+    sendTelegram(caption, null);
+  }
+}
+
+function showTgToast(msg) {
+  const t = document.getElementById('tg-toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ══════════════════════════════════════════════════════
+// AUDIO
+// ══════════════════════════════════════════════════════
+function initAudio() {
+  if (audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+}
+
+function playBeep() {
+  if (!audioCtx) return;
+  [0, 0.18, 0.36].forEach(o => {
+    const osc = audioCtx.createOscillator();
+    const g   = audioCtx.createGain();
+    osc.connect(g); g.connect(audioCtx.destination);
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(880, audioCtx.currentTime + o);
+    g.gain.setValueAtTime(0.3, audioCtx.currentTime + o);
+    g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + o + 0.12);
+    osc.start(audioCtx.currentTime + o);
+    osc.stop(audioCtx.currentTime + o + 0.13);
+  });
+}
+
+// ══════════════════════════════════════════════════════
+// LOG
+// ══════════════════════════════════════════════════════
+function addLog(msg, isAlert) {
+  const list = document.getElementById('log-list');
+  const now  = new Date().toLocaleTimeString();
+
+  // Clear placeholder
+  if (list.children.length === 1 && list.firstChild.querySelector('.log-item-msg')?.textContent === 'No alerts yet.') {
+    list.innerHTML = '';
+  }
+
+  const el = document.createElement('div');
+  el.className = 'log-item' + (isAlert ? ' alert-item' : '');
+  el.innerHTML = `<div class="log-item-time">${now}</div><div class="log-item-msg">${msg}</div>`;
+  list.prepend(el);
+  if (list.children.length > 50) list.lastChild.remove();
+
+  // Update stats
+  document.getElementById('ls-persons').textContent = totalPersons;
+  document.getElementById('ls-alerts').textContent  = totalAlerts;
+  document.getElementById('ls-tg').textContent      = totalTg;
+}
+
+// ══════════════════════════════════════════════════════
+// BOOT
+// ══════════════════════════════════════════════════════
+boot();
+
+// ── PWA Service Worker registration ──
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>
